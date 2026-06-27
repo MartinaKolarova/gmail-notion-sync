@@ -3,6 +3,6 @@ credentials.json
 token.json
 node_modules
 .DS_Store
-filtered_subjects.json
+filtered-subjects.json
 results.json
 index-oauth-working.js

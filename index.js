@@ -98,7 +98,7 @@ function isRelevant(email) {
 }
 async function classifyEmail(email) {
   const response = await ollama.chat({
-    model: 'qwen2.5:7b',
+    model: 'mistral:7b',
     messages: [
       {
         role: 'user',
@@ -188,24 +188,48 @@ async function saveToNotion(email) {
   });
 }
 async function main() {
-  const token = JSON.parse(fs.readFileSync('token.json', 'utf8'));
+  const daysAgo = new Date();
+  daysAgo.setDate(daysAgo.getDate() - 24);
+  const fromDate = daysAgo.toISOString().split('T')[0].replace(/-/g, '/');
 
   const credentials = JSON.parse(fs.readFileSync('credentials.json', 'utf8'));
-
   const { client_id, client_secret, redirect_uris } = credentials.installed;
-
   const auth = new google.auth.OAuth2(
     client_id,
     client_secret,
-    redirect_uris[0],
+    'http://localhost:3000',
   );
 
-  auth.setCredentials(token);
+  if (fs.existsSync('token.json')) {
+    auth.setCredentials(JSON.parse(fs.readFileSync('token.json', 'utf8')));
+  } else {
+    const url = auth.generateAuthUrl({
+      access_type: 'offline',
+      scope: ['https://www.googleapis.com/auth/gmail.readonly'],
+    });
+    console.log('Otevři tuto URL v prohlížeči:', url);
+    const http = require('http');
+    const code = await new Promise((resolve) => {
+      const server = http.createServer((req, res) => {
+        const code = new URL(req.url, 'http://localhost:3000').searchParams.get(
+          'code',
+        );
+        res.end('Hotovo! Zavři toto okno.');
+        server.close();
+        resolve(code);
+      });
+      server.listen(3000);
+    });
+    const { tokens } = await auth.getToken(code);
+    auth.setCredentials(tokens);
+    fs.writeFileSync('token.json', JSON.stringify(tokens));
+  }
 
   const gmail = google.gmail({
     version: 'v1',
-    auth,
+    auth: auth,
   });
+  google.options({ auth });
 
   let nextPageToken = null;
   const emails = [];
@@ -213,7 +237,7 @@ async function main() {
   do {
     const response = await gmail.users.messages.list({
       userId: 'me',
-      q: 'after:2026/03/23 -from:notifications-noreply@linkedin.com -from:messages-noreply@linkedin.com -from:jobalerts-noreply@linkedin.com -from:novinky@odkarla.cz -from:no-reply@accounts.google.com -from:noreply@email.apple.com -from:noreply@novinky.sconto.cz -from:hezkyden@slevomat.cz -from:Coursera@m.learn.coursera.org -from:peckyzrohliku@rohlik.cz -from:info@newsletter.rossmann.cz  -from:jobs-listings@linkedin.com -from:decathlon.cz@email.decathlon.com -from:info@newsletter.agatinsvet.cz -from:info@e.knihydobrovsky.cz -from:no-reply@updates.sellpy.cz -from:no-reply@vinted.cz -from:arjo@amalka.info -from:kolar.dom@seznam.cz -from:info@katerinaresort.cz -from:ibmskillsbuild.emea@skillup.online -from:noreply@github.com -from:eshop@my-concept.cz -from:priznivci@svobodazvirat.cz -from:workspace-noreply@google.com -from:Azure@promomail.microsoft.com -from:info@saunia.cz -from:security@facebookmail.com -from:info@cleanwhale.cz -from:calendar-notification@google.com -from:newsletter@od.mestskadivadlaprazska.cz -from:notify@updates.notion.so -from:info@zuzanaklingrova.cz -from:ahoj@gardners-eshop.cz -from:security-noreply@linkedin.com -from:czechia@delivery-marketing.bolt.eu -from:czech@rides-promotions.bolt.eu -from:googleartsandculture-noreply@google.com -from:newsletter@absynt.sk -from:no-reply@avenga.teamtailor-mail.com -from:donio@donio.cz -from:no_reply@email.apple.com -from:shoes@littleshoes.cz -from:career-interests-noreply@linkedin.com -from:noreply@campaign.lindex.com -from:team@mail.notion.so -from:info@fitbelly.cz -from:milujemeknihy@martinus.cz -from:info@audiolibrix.com -from:no-reply@google.com -from:info@goodladies.cz -from:noreply-account-migration@google.com -from:support@ppl.cz -from:noreply-familynes@oznameni.nestle.cz -from:hello@getqr.com -from:noreply@geoguessr.com -from:account-security-noreply@accountprotection.microsoft.com -from:kontakt@mbank.cz',
+      q: `after:${fromDate} -from:notifications-noreply@linkedin.com -from:messages-noreply@linkedin.com -from:jobalerts-noreply@linkedin.com -from:novinky@odkarla.cz -from:no-reply@accounts.google.com -from:noreply@email.apple.com -from:noreply@novinky.sconto.cz -from:hezkyden@slevomat.cz -from:Coursera@m.learn.coursera.org -from:peckyzrohliku@rohlik.cz -from:info@newsletter.rossmann.cz  -from:jobs-listings@linkedin.com -from:decathlon.cz@email.decathlon.com -from:info@newsletter.agatinsvet.cz -from:info@e.knihydobrovsky.cz -from:no-reply@updates.sellpy.cz -from:no-reply@vinted.cz -from:arjo@amalka.info -from:kolar.dom@seznam.cz -from:info@katerinaresort.cz -from:ibmskillsbuild.emea@skillup.online -from:noreply@github.com -from:eshop@my-concept.cz -from:priznivci@svobodazvirat.cz -from:workspace-noreply@google.com -from:Azure@promomail.microsoft.com -from:info@saunia.cz -from:security@facebookmail.com -from:info@cleanwhale.cz -from:calendar-notification@google.com -from:newsletter@od.mestskadivadlaprazska.cz -from:notify@updates.notion.so -from:info@zuzanaklingrova.cz -from:ahoj@gardners-eshop.cz -from:security-noreply@linkedin.com -from:czechia@delivery-marketing.bolt.eu -from:czech@rides-promotions.bolt.eu -from:googleartsandculture-noreply@google.com -from:newsletter@absynt.sk -from:no-reply@avenga.teamtailor-mail.com -from:donio@donio.cz -from:no_reply@email.apple.com -from:shoes@littleshoes.cz -from:career-interests-noreply@linkedin.com -from:noreply@campaign.lindex.com -from:team@mail.notion.so -from:info@fitbelly.cz -from:milujemeknihy@martinus.cz -from:info@audiolibrix.com -from:no-reply@google.com -from:info@goodladies.cz -from:noreply-account-migration@google.com -from:support@ppl.cz -from:noreply-familynes@oznameni.nestle.cz -from:hello@getqr.com -from:noreply@geoguessr.com -from:account-security-noreply@accountprotection.microsoft.com -from:kontakt@mbank.cz`,
       maxResults: 500,
       pageToken: nextPageToken,
     });
