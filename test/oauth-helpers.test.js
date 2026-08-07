@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { validateOAuthCallback } = require('../oauth-helpers');
+const { validateOAuthCallback, resolveOAuthMode } = require('../oauth-helpers');
 
 test('valid OAuth callback is accepted', () => {
   const expectedState = 'expected-state-123';
@@ -69,4 +69,47 @@ test('unexpected callback path is rejected', () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'unexpected path');
+});
+
+test('normal run with existing token is allowed', () => {
+  const result = resolveOAuthMode([], true);
+
+  assert.equal(result.mode, 'normal-token-present');
+  assert.equal(result.authorizeOnly, false);
+  assert.equal(result.allowOAuth, false);
+  assert.equal(result.allowRuntime, true);
+  assert.equal(result.shouldExit, false);
+});
+
+test('missing token without authorize-only is blocked', () => {
+  const result = resolveOAuthMode([], false);
+
+  assert.equal(result.mode, 'missing-token-blocked');
+  assert.equal(result.authorizeOnly, false);
+  assert.equal(result.allowOAuth, false);
+  assert.equal(result.allowRuntime, false);
+  assert.equal(result.shouldExit, true);
+  assert.equal(typeof result.message, 'string');
+});
+
+test('authorize-only with existing token is blocked and safe', () => {
+  const result = resolveOAuthMode(['--authorize-only'], true);
+
+  assert.equal(result.mode, 'authorize-only-existing-token');
+  assert.equal(result.authorizeOnly, true);
+  assert.equal(result.allowOAuth, false);
+  assert.equal(result.allowRuntime, false);
+  assert.equal(result.shouldExit, true);
+  assert.equal(typeof result.message, 'string');
+});
+
+test('authorize-only without token chooses OAuth-only creation path', () => {
+  const result = resolveOAuthMode(['--authorize-only'], false);
+
+  assert.equal(result.mode, 'authorize-only-create-token');
+  assert.equal(result.authorizeOnly, true);
+  assert.equal(result.allowOAuth, true);
+  assert.equal(result.allowRuntime, false);
+  assert.equal(result.shouldExit, true);
+  assert.equal(typeof result.message, 'string');
 });

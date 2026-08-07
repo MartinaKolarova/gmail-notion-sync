@@ -1,5 +1,53 @@
 const crypto = require('node:crypto');
 
+function resolveOAuthMode(argv = [], hasToken = false) {
+  const args = Array.isArray(argv) ? argv : [];
+  const authorizeOnly = args.includes('--authorize-only');
+
+  if (authorizeOnly) {
+    if (hasToken) {
+      return {
+        mode: 'authorize-only-existing-token',
+        authorizeOnly: true,
+        allowOAuth: false,
+        allowRuntime: false,
+        shouldExit: true,
+        message:
+          'OAuth authorize-only režim je zamítnut, protože token.json již existuje. Přesuňte soubor ručně a spusťte režim znovu.',
+      };
+    }
+
+    return {
+      mode: 'authorize-only-create-token',
+      authorizeOnly: true,
+      allowOAuth: true,
+      allowRuntime: false,
+      shouldExit: true,
+      message: 'OAuth authorize-only režim připraven k vytvoření tokenu.',
+    };
+  }
+
+  if (hasToken) {
+    return {
+      mode: 'normal-token-present',
+      authorizeOnly: false,
+      allowOAuth: false,
+      allowRuntime: true,
+      shouldExit: false,
+    };
+  }
+
+  return {
+    mode: 'missing-token-blocked',
+    authorizeOnly: false,
+    allowOAuth: false,
+    allowRuntime: false,
+    shouldExit: true,
+    message:
+      'Token není k dispozici. Nejprve spusťte režim --authorize-only pro vytvoření token.json.',
+  };
+}
+
 function createOAuthState() {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -43,4 +91,5 @@ function validateOAuthCallback(requestUrl, expectedState) {
 module.exports = {
   createOAuthState,
   validateOAuthCallback,
+  resolveOAuthMode,
 };

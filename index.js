@@ -5,7 +5,11 @@ const { google } = require('googleapis');
 const { Ollama } = require('ollama');
 const { Client } = require('@notionhq/client');
 const { getBody, isRelevant } = require('./email-helpers');
-const { createOAuthState, validateOAuthCallback } = require('./oauth-helpers');
+const {
+  createOAuthState,
+  validateOAuthCallback,
+  resolveOAuthMode,
+} = require('./oauth-helpers');
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 const ollama = new Ollama();
 
@@ -101,28 +105,36 @@ async function saveToNotion(email) {
   });
 }
 async function main() {
-  const daysAgo = new Date();
-  daysAgo.setDate(daysAgo.getDate() - 16);
-  const fromDate = daysAgo.toISOString().split('T')[0].replace(/-/g, '/');
+  const mode = resolveOAuthMode(process.argv.slice(2), fs.existsSync('token.json'));
 
-  const credentials = JSON.parse(fs.readFileSync('credentials.json', 'utf8'));
-  const { client_id, client_secret, redirect_uris } = credentials.installed;
-  const auth = new google.auth.OAuth2(
-    client_id,
-    client_secret,
-    'http://localhost:3000',
-  );
+  if (mode.mode === 'missing-token-blocked') {
+    console.log(mode.message);
+    return;
+  }
 
-  if (fs.existsSync('token.json')) {
-    auth.setCredentials(JSON.parse(fs.readFileSync('token.json', 'utf8')));
-  } else {
+  if (mode.mode === 'authorize-only-existing-token') {
+    console.log(mode.message);
+    return;
+  }
+
+  if (mode.mode === 'authorize-only-create-token') {
+    const credentials = JSON.parse(fs.readFileSync('credentials.json', 'utf8'));
+    const { client_id, client_secret, redirect_uris } = credentials.installed;
+    const auth = new google.auth.OAuth2(
+      client_id,
+      client_secret,
+      'http://localhost:3000',
+    );
+
     const state = createOAuthState();
     const url = auth.generateAuthUrl({
       access_type: 'offline',
       scope: ['https://www.googleapis.com/auth/gmail.readonly'],
       state,
     });
+
     console.log('Otevři tuto URL v prohlížeči:', url);
+
     const http = require('http');
     const code = await new Promise((resolve, reject) => {
       let settled = false;
@@ -156,7 +168,9 @@ async function main() {
               return;
             }
 
-            res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.writeHead(400, {
+              'Content-Type': 'text/plain; charset=utf-8',
+            });
             res.end('Invalid OAuth callback');
             return;
           }
@@ -199,6 +213,7 @@ async function main() {
 
       server.listen(3000, 'localhost');
     });
+
     const { tokens } = await auth.getToken(code);
     auth.setCredentials(tokens);
     fs.writeFileSync('token.json', JSON.stringify(tokens), {
@@ -206,7 +221,24 @@ async function main() {
       flag: 'w',
     });
     fs.chmodSync('token.json', 0o600);
+
+    console.log('OAuth authorize-only režim dokončen. Token byl uložen.');
+    return;
   }
+
+  const daysAgo = new Date();
+  daysAgo.setDate(daysAgo.getDate() - 16);
+  const fromDate = daysAgo.toISOString().split('T')[0].replace(/-/g, '/');
+
+  const credentials = JSON.parse(fs.readFileSync('credentials.json', 'utf8'));
+  const { client_id, client_secret, redirect_uris } = credentials.installed;
+  const auth = new google.auth.OAuth2(
+    client_id,
+    client_secret,
+    'http://localhost:3000',
+  );
+
+  auth.setCredentials(JSON.parse(fs.readFileSync('token.json', 'utf8')));
 
   const gmail = google.gmail({
     version: 'v1',
