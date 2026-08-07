@@ -4,101 +4,14 @@ const fs = require('fs');
 const { google } = require('googleapis');
 const { Ollama } = require('ollama');
 const { Client } = require('@notionhq/client');
+const { getBody, isRelevant } = require('./email-helpers');
+const { createOAuthState, validateOAuthCallback } = require('./oauth-helpers');
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 const ollama = new Ollama();
 
-function getBody(payload) {
-  if (payload.body?.data) {
-    return Buffer.from(payload.body.data, 'base64').toString('utf8');
-  }
-  if (payload.parts) {
-    const textPart = payload.parts.find(
-      (part) => part.mimeType === 'text/plain',
-    );
-    if (textPart?.body?.data) {
-      return Buffer.from(textPart.body.data, 'base64').toString('utf8');
-    }
-    // Rekurzivně pro vnořené multipart
-    for (const part of payload.parts) {
-      const text = getBody(part);
-      if (text) return text;
-    }
-  }
-  return '';
-}
-function isRelevant(email) {
-  const from = (email.from || '').toLowerCase();
-  const subject = (email.subject || '').toLowerCase();
-
-  if (from.includes('pomuzeme@jobs.cz')) {
-    return true;
-  }
-
-  if (from.includes('jobs-noreply@linkedin.com')) {
-    const normalized = subject.trim().replace(/^[^a-zá-ž]+/i, '');
-
-    return normalized.startsWith('vaše žádost');
-  }
-
-  const keywords = [
-    // Přihlášky
-    'přihláška',
-    'přihlášce',
-    'přihlásil',
-    'přihlásila',
-    'výběrové řízení',
-    'výběrového řízení',
-    'váš zájem o pozici',
-    'zájem pracovat',
-    'děkujeme za zájem',
-    'thank you for your application',
-    'your application',
-    // Pohovor
-    'pohovor',
-    'pohovoru',
-    'pozvánka na pohovor',
-    'rádi bychom vás pozvali',
-    'we would like to invite',
-    'interview',
-    // Pozitivní
-    'máme zájem',
-    'postupujete do dalšího kola',
-    'gratulujeme',
-    'nabízíme vám',
-    'we are pleased',
-    'congratulations',
-    'offer letter',
-    // Zamítnutí
-    'váš zájem o pozici jsme zaregistrovali',
-    'unfortunately',
-    'we regret',
-    'nebudeme pokračovat',
-    'nebyli jste vybrán',
-    'ukončení řízení',
-    // Obecné pracovní
-    'pozice',
-    'pozici',
-    'životopis',
-    ' cv ',
-    'kandidát',
-    'kandidátka',
-    'recruitment',
-    'recruiter',
-    'hiring',
-    'career',
-    'application',
-    'job offer',
-  ];
-
-  const bodyPreview = (email.body || '').slice(0, 500).toLowerCase();
-
-  return keywords.some(
-    (kw) => subject.includes(kw) || bodyPreview.includes(kw),
-  );
-}
 async function classifyEmail(email) {
   const response = await ollama.chat({
-    model: 'mistral:7b',
+    model: 'qwen2.5:7b',
     messages: [
       {
         role: 'user',
@@ -189,7 +102,7 @@ async function saveToNotion(email) {
 }
 async function main() {
   const daysAgo = new Date();
-  daysAgo.setDate(daysAgo.getDate() - 24);
+  daysAgo.setDate(daysAgo.getDate() - 16);
   const fromDate = daysAgo.toISOString().split('T')[0].replace(/-/g, '/');
 
   const credentials = JSON.parse(fs.readFileSync('credentials.json', 'utf8'));
@@ -203,26 +116,96 @@ async function main() {
   if (fs.existsSync('token.json')) {
     auth.setCredentials(JSON.parse(fs.readFileSync('token.json', 'utf8')));
   } else {
+    const state = createOAuthState();
     const url = auth.generateAuthUrl({
       access_type: 'offline',
       scope: ['https://www.googleapis.com/auth/gmail.readonly'],
+      state,
     });
     console.log('Otevři tuto URL v prohlížeči:', url);
     const http = require('http');
-    const code = await new Promise((resolve) => {
+    const code = await new Promise((resolve, reject) => {
+      let settled = false;
+      let timeoutId;
+
+      const closeServer = () => {
+        if (server) {
+          server.close(() => {});
+        }
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      };
+
       const server = http.createServer((req, res) => {
-        const code = new URL(req.url, 'http://localhost:3000').searchParams.get(
-          'code',
-        );
-        res.end('Hotovo! Zavři toto okno.');
-        server.close();
-        resolve(code);
+        try {
+          const requestUrl = new URL(req.url, 'http://localhost:3000');
+          const validation = validateOAuthCallback(requestUrl, state);
+
+          if (!validation.ok) {
+            if (validation.reason === 'oauth error') {
+              res.writeHead(400, {
+                'Content-Type': 'text/plain; charset=utf-8',
+              });
+              res.end('OAuth callback failed');
+              if (!settled) {
+                settled = true;
+                closeServer();
+                reject(new Error('OAuth callback failed'));
+              }
+              return;
+            }
+
+            res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Invalid OAuth callback');
+            return;
+          }
+
+          res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Hotovo! Zavři toto okno.');
+
+          if (!settled) {
+            settled = true;
+            closeServer();
+            resolve(validation.code);
+          }
+        } catch (e) {
+          if (!settled) {
+            settled = true;
+            closeServer();
+            reject(e);
+          }
+        }
       });
-      server.listen(3000);
+
+      server.on('error', (e) => {
+        if (!settled) {
+          settled = true;
+          closeServer();
+          reject(e);
+        }
+      });
+
+      timeoutId = setTimeout(
+        () => {
+          if (!settled) {
+            settled = true;
+            closeServer();
+            reject(new Error('OAuth callback timeout'));
+          }
+        },
+        5 * 60 * 1000,
+      );
+
+      server.listen(3000, 'localhost');
     });
     const { tokens } = await auth.getToken(code);
     auth.setCredentials(tokens);
-    fs.writeFileSync('token.json', JSON.stringify(tokens));
+    fs.writeFileSync('token.json', JSON.stringify(tokens), {
+      mode: 0o600,
+      flag: 'w',
+    });
+    fs.chmodSync('token.json', 0o600);
   }
 
   const gmail = google.gmail({
@@ -280,6 +263,10 @@ async function main() {
   const filtered = emails.filter(isRelevant);
   console.log('Po filtraci klíčovými slovy:', filtered.length);
 
+  let savedRelevant = 0;
+  let classifiedNonRelevant = 0;
+  let unsuccessful = 0;
+
   for (const email of filtered) {
     try {
       // Přeskoč Ollamu pro jobs.cz
@@ -294,44 +281,50 @@ async function main() {
           informace: null,
           kontakt: null,
         });
-        console.log('✅ Jobs.cz:', email.subject);
+        savedRelevant += 1;
         continue;
       }
       const result = await classifyEmail(email);
       if (result.relevant) {
         relevant.push({ ...email, ...result });
         await saveToNotion({ ...email, ...result });
-        console.log('✅', email.subject);
+        savedRelevant += 1;
       } else {
-        console.log('❌', email.subject);
+        classifiedNonRelevant += 1;
       }
     } catch (e) {
-      if (e.message.includes('fetch failed')) {
-        console.log('🔄 Retry:', email.subject);
-        try {
-          const result = await classifyEmail(email);
-          if (result.relevant) {
-            relevant.push({ ...email, ...result });
-            await saveToNotion({ ...email, ...result });
-            console.log('✅', email.subject);
-          }
-        } catch (e2) {
-          console.log('⚠️ Chyba po retry:', email.subject, e2.message);
-        }
-      } else {
-        console.log('⚠️ Chyba:', email.subject, e.message);
+      unsuccessful += 1;
+      console.log('\n==============================');
+      console.log('Zpracování zprávy bylo neúspěšné (bez detailů obsahu).');
+      console.log('Typ chyby:', e?.name || 'UnknownError');
+      if (typeof e?.code === 'string' || typeof e?.code === 'number') {
+        console.log('Code:', e.code);
       }
+      if (typeof e?.status === 'string' || typeof e?.status === 'number') {
+        console.log('HTTP status:', e.status);
+      }
+      console.log('==============================\n');
     }
   }
-  console.log('\nRelevantních emailů:', relevant.length);
+
+  console.log('\nRelevantních emailů (úspěšně uloženo):', savedRelevant);
   console.log(
-    relevant.map((e) => ({
-      subject: e.subject,
-      firma: e.firma,
-      pozice: e.pozice,
-      stav: e.stav,
-    })),
+    'Nerelevantních emailů (úspěšně klasifikováno):',
+    classifiedNonRelevant,
   );
+  console.log('Skutečně neúspěšných zpracování:', unsuccessful);
 }
 
-main().catch(console.error);
+main().catch((e) => {
+  console.log('\n==============================');
+  console.log('Zpracování aplikace selhalo (bez detailů obsahu).');
+  console.log('Typ chyby:', e?.name || 'UnknownError');
+  if (typeof e?.code === 'string' || typeof e?.code === 'number') {
+    console.log('Code:', e.code);
+  }
+  if (typeof e?.status === 'string' || typeof e?.status === 'number') {
+    console.log('HTTP status:', e.status);
+  }
+  console.log('==============================\n');
+  process.exitCode = 1;
+});
