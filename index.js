@@ -7,6 +7,7 @@ const { Client } = require('@notionhq/client');
 const { getBody, isRelevant } = require('./email-helpers');
 const {
   createOAuthState,
+  buildOAuthAuthorizationOptions,
   validateOAuthCallback,
   resolveOAuthMode,
 } = require('./oauth-helpers');
@@ -127,11 +128,7 @@ async function main() {
     );
 
     const state = createOAuthState();
-    const url = auth.generateAuthUrl({
-      access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/gmail.readonly'],
-      state,
-    });
+    const url = auth.generateAuthUrl(buildOAuthAuthorizationOptions(state));
 
     console.log('Otevři tuto URL v prohlížeči:', url);
 

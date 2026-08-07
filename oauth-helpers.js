@@ -52,6 +52,15 @@ function createOAuthState() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function buildOAuthAuthorizationOptions(state) {
+  return {
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: ['https://www.googleapis.com/auth/gmail.readonly'],
+    state,
+  };
+}
+
 function validateOAuthCallback(requestUrl, expectedState) {
   const url =
     requestUrl instanceof URL
@@ -90,6 +99,7 @@ function validateOAuthCallback(requestUrl, expectedState) {
 
 module.exports = {
   createOAuthState,
+  buildOAuthAuthorizationOptions,
   validateOAuthCallback,
   resolveOAuthMode,
 };

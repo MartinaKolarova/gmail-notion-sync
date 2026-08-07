@@ -1,7 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { validateOAuthCallback, resolveOAuthMode } = require('../oauth-helpers');
+const {
+  validateOAuthCallback,
+  resolveOAuthMode,
+  buildOAuthAuthorizationOptions,
+} = require('../oauth-helpers');
 
 test('valid OAuth callback is accepted', () => {
   const expectedState = 'expected-state-123';
@@ -69,6 +73,18 @@ test('unexpected callback path is rejected', () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'unexpected path');
+});
+
+test('buildOAuthAuthorizationOptions returns the four requested OAuth fields', () => {
+  const state = 'synthetic-state-123';
+  const result = buildOAuthAuthorizationOptions(state);
+
+  assert.deepEqual(result, {
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: ['https://www.googleapis.com/auth/gmail.readonly'],
+    state,
+  });
 });
 
 test('normal run with existing token is allowed', () => {
