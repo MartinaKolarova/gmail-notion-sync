@@ -52,12 +52,33 @@ function createOAuthState() {
   return crypto.randomBytes(32).toString('hex');
 }
 
-function buildOAuthAuthorizationOptions(state) {
+function buildOAuthAuthorizationOptions(state, codeChallenge) {
+  if (typeof codeChallenge !== 'string' || codeChallenge.trim() === '') {
+    throw new TypeError('PKCE code challenge is required');
+  }
+
   return {
     access_type: 'offline',
     prompt: 'consent',
     scope: ['https://www.googleapis.com/auth/gmail.readonly'],
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256',
+  };
+}
+
+function buildOAuthTokenExchangeOptions(code, codeVerifier) {
+  if (typeof code !== 'string' || code.trim() === '') {
+    throw new TypeError('OAuth authorization code is required');
+  }
+
+  if (typeof codeVerifier !== 'string' || codeVerifier.trim() === '') {
+    throw new TypeError('PKCE code verifier is required');
+  }
+
+  return {
+    code,
+    codeVerifier,
   };
 }
 
@@ -100,6 +121,7 @@ function validateOAuthCallback(requestUrl, expectedState) {
 module.exports = {
   createOAuthState,
   buildOAuthAuthorizationOptions,
+  buildOAuthTokenExchangeOptions,
   validateOAuthCallback,
   resolveOAuthMode,
 };

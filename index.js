@@ -8,6 +8,7 @@ const { getBody, isRelevant } = require('./email-helpers');
 const {
   createOAuthState,
   buildOAuthAuthorizationOptions,
+  buildOAuthTokenExchangeOptions,
   validateOAuthCallback,
   resolveOAuthMode,
 } = require('./oauth-helpers');
@@ -106,7 +107,10 @@ async function saveToNotion(email) {
   });
 }
 async function main() {
-  const mode = resolveOAuthMode(process.argv.slice(2), fs.existsSync('token.json'));
+  const mode = resolveOAuthMode(
+    process.argv.slice(2),
+    fs.existsSync('token.json'),
+  );
 
   if (mode.mode === 'missing-token-blocked') {
     console.log(mode.message);
@@ -128,7 +132,11 @@ async function main() {
     );
 
     const state = createOAuthState();
-    const url = auth.generateAuthUrl(buildOAuthAuthorizationOptions(state));
+    const { codeVerifier, codeChallenge } =
+      await auth.generateCodeVerifierAsync();
+    const url = auth.generateAuthUrl(
+      buildOAuthAuthorizationOptions(state, codeChallenge),
+    );
 
     console.log('Otevři tuto URL v prohlížeči:', url);
 
@@ -211,7 +219,9 @@ async function main() {
       server.listen(3000, 'localhost');
     });
 
-    const { tokens } = await auth.getToken(code);
+    const { tokens } = await auth.getToken(
+      buildOAuthTokenExchangeOptions(code, codeVerifier),
+    );
     auth.setCredentials(tokens);
     fs.writeFileSync('token.json', JSON.stringify(tokens), {
       mode: 0o600,
@@ -224,7 +234,7 @@ async function main() {
   }
 
   const daysAgo = new Date();
-  daysAgo.setDate(daysAgo.getDate() - 16);
+  daysAgo.setDate(daysAgo.getDate() - 23);
   const fromDate = daysAgo.toISOString().split('T')[0].replace(/-/g, '/');
 
   const credentials = JSON.parse(fs.readFileSync('credentials.json', 'utf8'));

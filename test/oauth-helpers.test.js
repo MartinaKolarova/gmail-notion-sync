@@ -5,6 +5,7 @@ const {
   validateOAuthCallback,
   resolveOAuthMode,
   buildOAuthAuthorizationOptions,
+  buildOAuthTokenExchangeOptions,
 } = require('../oauth-helpers');
 
 test('valid OAuth callback is accepted', () => {
@@ -75,16 +76,49 @@ test('unexpected callback path is rejected', () => {
   assert.equal(result.reason, 'unexpected path');
 });
 
-test('buildOAuthAuthorizationOptions returns the four requested OAuth fields', () => {
+test('buildOAuthAuthorizationOptions returns state, scope and PKCE S256 challenge', () => {
   const state = 'synthetic-state-123';
-  const result = buildOAuthAuthorizationOptions(state);
+  const codeChallenge = 'synthetic-code-challenge-456';
+  const result = buildOAuthAuthorizationOptions(state, codeChallenge);
 
   assert.deepEqual(result, {
     access_type: 'offline',
     prompt: 'consent',
     scope: ['https://www.googleapis.com/auth/gmail.readonly'],
     state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256',
   });
+});
+
+test('buildOAuthAuthorizationOptions rejects a missing PKCE challenge', () => {
+  assert.throws(
+    () => buildOAuthAuthorizationOptions('synthetic-state-123', ''),
+    /PKCE code challenge is required/,
+  );
+});
+
+test('buildOAuthTokenExchangeOptions pairs code with the PKCE verifier', () => {
+  const result = buildOAuthTokenExchangeOptions(
+    'synthetic-authorization-code',
+    'synthetic-code-verifier',
+  );
+
+  assert.deepEqual(result, {
+    code: 'synthetic-authorization-code',
+    codeVerifier: 'synthetic-code-verifier',
+  });
+});
+
+test('buildOAuthTokenExchangeOptions rejects a missing code or verifier', () => {
+  assert.throws(
+    () => buildOAuthTokenExchangeOptions('', 'synthetic-code-verifier'),
+    /OAuth authorization code is required/,
+  );
+  assert.throws(
+    () => buildOAuthTokenExchangeOptions('synthetic-code', ''),
+    /PKCE code verifier is required/,
+  );
 });
 
 test('normal run with existing token is allowed', () => {
