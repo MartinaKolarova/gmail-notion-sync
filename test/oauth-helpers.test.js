@@ -4,9 +4,26 @@ const assert = require('node:assert/strict');
 const {
   validateOAuthCallback,
   resolveOAuthMode,
+  buildLoopbackRedirectUri,
   buildOAuthAuthorizationOptions,
   buildOAuthTokenExchangeOptions,
 } = require('../oauth-helpers');
+
+test('buildLoopbackRedirectUri creates an IPv4 loopback redirect URI', () => {
+  assert.equal(
+    buildLoopbackRedirectUri(49152),
+    'http://127.0.0.1:49152',
+  );
+});
+
+test('buildLoopbackRedirectUri rejects invalid ports', () => {
+  for (const port of [0, -1, 65536, 3000.5, '3000', null]) {
+    assert.throws(
+      () => buildLoopbackRedirectUri(port),
+      /Valid loopback port is required/,
+    );
+  }
+});
 
 test('valid OAuth callback is accepted', () => {
   const expectedState = 'expected-state-123';

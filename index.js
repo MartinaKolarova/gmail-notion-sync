@@ -7,6 +7,7 @@ const { Client } = require('@notionhq/client');
 const { getBody, isRelevant } = require('./email-helpers');
 const {
   createOAuthState,
+  buildLoopbackRedirectUri,
   buildOAuthAuthorizationOptions,
   buildOAuthTokenExchangeOptions,
   validateOAuthCallback,
@@ -124,110 +125,130 @@ async function main() {
 
   if (mode.mode === 'authorize-only-create-token') {
     const credentials = JSON.parse(fs.readFileSync('credentials.json', 'utf8'));
-    const { client_id, client_secret, redirect_uris } = credentials.installed;
+    const { client_id, client_secret } = credentials.installed;
+    const http = require('http');
+    const server = http.createServer();
+
+    await new Promise((resolve, reject) => {
+      const handleStartupError = (error) => {
+        server.off('listening', handleListening);
+        reject(error);
+      };
+      const handleListening = () => {
+        server.off('error', handleStartupError);
+        resolve();
+      };
+
+      server.once('error', handleStartupError);
+      server.once('listening', handleListening);
+      server.listen(0, '127.0.0.1');
+    });
+
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      server.close(() => {});
+      throw new Error('OAuth loopback server address unavailable');
+    }
+
+    const redirectUri = buildLoopbackRedirectUri(address.port);
     const auth = new google.auth.OAuth2(
       client_id,
       client_secret,
-      'http://localhost:3000',
+      redirectUri,
     );
-
     const state = createOAuthState();
-    const { codeVerifier, codeChallenge } =
-      await auth.generateCodeVerifierAsync();
-    const url = auth.generateAuthUrl(
-      buildOAuthAuthorizationOptions(state, codeChallenge),
-    );
 
-    console.log('Otevři tuto URL v prohlížeči:', url);
+    let code;
+    try {
+      const { codeVerifier, codeChallenge } =
+        await auth.generateCodeVerifierAsync();
+      const url = auth.generateAuthUrl(
+        buildOAuthAuthorizationOptions(state, codeChallenge),
+      );
 
-    const http = require('http');
-    const code = await new Promise((resolve, reject) => {
-      let settled = false;
-      let timeoutId;
+      console.log('Otevři tuto URL v prohlížeči:', url);
 
-      const closeServer = () => {
-        if (server) {
-          server.close(() => {});
-        }
-        if (timeoutId) {
+      code = await new Promise((resolve, reject) => {
+        let settled = false;
+
+        const cleanup = () => {
           clearTimeout(timeoutId);
-        }
-      };
+          server.off('request', handleRequest);
+          server.off('error', handleServerError);
+          if (server.listening) {
+            server.close(() => {});
+          }
+        };
 
-      const server = http.createServer((req, res) => {
-        try {
-          const requestUrl = new URL(req.url, 'http://localhost:3000');
-          const validation = validateOAuthCallback(requestUrl, state);
+        const settle = (callback, value) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          callback(value);
+        };
 
-          if (!validation.ok) {
-            if (validation.reason === 'oauth error') {
+        const handleRequest = (req, res) => {
+          try {
+            const requestUrl = new URL(req.url, redirectUri);
+            const validation = validateOAuthCallback(requestUrl, state);
+
+            if (!validation.ok) {
+              if (validation.reason === 'oauth error') {
+                res.writeHead(400, {
+                  'Content-Type': 'text/plain; charset=utf-8',
+                });
+                res.end('OAuth callback failed');
+                settle(reject, new Error('OAuth callback failed'));
+                return;
+              }
+
               res.writeHead(400, {
                 'Content-Type': 'text/plain; charset=utf-8',
               });
-              res.end('OAuth callback failed');
-              if (!settled) {
-                settled = true;
-                closeServer();
-                reject(new Error('OAuth callback failed'));
-              }
+              res.end('Invalid OAuth callback');
               return;
             }
 
-            res.writeHead(400, {
+            res.writeHead(200, {
               'Content-Type': 'text/plain; charset=utf-8',
             });
-            res.end('Invalid OAuth callback');
-            return;
+            res.end('Hotovo! Zavři toto okno.');
+            settle(resolve, validation.code);
+          } catch (error) {
+            settle(reject, error);
           }
+        };
 
-          res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('Hotovo! Zavři toto okno.');
+        const handleServerError = (error) => {
+          settle(reject, error);
+        };
 
-          if (!settled) {
-            settled = true;
-            closeServer();
-            resolve(validation.code);
-          }
-        } catch (e) {
-          if (!settled) {
-            settled = true;
-            closeServer();
-            reject(e);
-          }
-        }
+        const timeoutId = setTimeout(
+          () => settle(reject, new Error('OAuth callback timeout')),
+          5 * 60 * 1000,
+        );
+
+        server.on('request', handleRequest);
+        server.once('error', handleServerError);
       });
 
-      server.on('error', (e) => {
-        if (!settled) {
-          settled = true;
-          closeServer();
-          reject(e);
-        }
-      });
-
-      timeoutId = setTimeout(
-        () => {
-          if (!settled) {
-            settled = true;
-            closeServer();
-            reject(new Error('OAuth callback timeout'));
-          }
-        },
-        5 * 60 * 1000,
+      const { tokens } = await auth.getToken(
+        buildOAuthTokenExchangeOptions(code, codeVerifier),
       );
-
-      server.listen(3000, 'localhost');
-    });
-
-    const { tokens } = await auth.getToken(
-      buildOAuthTokenExchangeOptions(code, codeVerifier),
-    );
-    auth.setCredentials(tokens);
-    fs.writeFileSync('token.json', JSON.stringify(tokens), {
-      mode: 0o600,
-      flag: 'w',
-    });
-    fs.chmodSync('token.json', 0o600);
+      auth.setCredentials(tokens);
+      fs.writeFileSync('token.json', JSON.stringify(tokens), {
+        mode: 0o600,
+        flag: 'w',
+      });
+      fs.chmodSync('token.json', 0o600);
+    } catch (error) {
+      if (server.listening) {
+        server.close(() => {});
+      }
+      throw error;
+    }
 
     console.log('OAuth authorize-only režim dokončen. Token byl uložen.');
     return;

@@ -52,6 +52,14 @@ function createOAuthState() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function buildLoopbackRedirectUri(port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new TypeError('Valid loopback port is required');
+  }
+
+  return `http://127.0.0.1:${port}`;
+}
+
 function buildOAuthAuthorizationOptions(state, codeChallenge) {
   if (typeof codeChallenge !== 'string' || codeChallenge.trim() === '') {
     throw new TypeError('PKCE code challenge is required');
@@ -120,6 +128,7 @@ function validateOAuthCallback(requestUrl, expectedState) {
 
 module.exports = {
   createOAuthState,
+  buildLoopbackRedirectUri,
   buildOAuthAuthorizationOptions,
   buildOAuthTokenExchangeOptions,
   validateOAuthCallback,
